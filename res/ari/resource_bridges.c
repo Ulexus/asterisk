@@ -199,6 +199,7 @@ void ast_ari_bridges_add_channel(struct ast_variable *headers,
 	size_t i;
 	int has_error = 0;
 
+
 	if (!bridge) {
 		/* Response filled in by find_bridge() */
 		return;
@@ -219,6 +220,14 @@ void ast_ari_bridges_add_channel(struct ast_variable *headers,
 			}
 		}
 	}
+
+   /* Apply bridge features to each of the channel controls */
+   for (i = 0; i < list->count; ++i) {
+      if(!stasis_app_control_bridge_features_init(list->controls[i])) {
+         stasis_app_control_absorb_dtmf_in_bridge(list->controls[i], args->absorb_dtmf);
+         stasis_app_control_mute_in_bridge(list->controls[i], args->mute);
+      }
+   }
 
 	for (i = 0; i < list->count; ++i) {
 		if ((has_error = check_add_remove_channel(response, list->controls[i],

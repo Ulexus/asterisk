@@ -35,6 +35,7 @@
 #include "asterisk/bridge.h"
 #include "asterisk/bridge_after.h"
 #include "asterisk/bridge_basic.h"
+#include "asterisk/bridge_features.h"
 #include "asterisk/frame.h"
 #include "asterisk/pbx.h"
 #include "asterisk/musiconhold.h"
@@ -61,6 +62,10 @@ struct stasis_app_control {
 	 * When a channel is in a bridge, the bridge that it is in.
 	 */
 	struct ast_bridge *bridge;
+	/*!
+	 * Bridge features which should be applied to the channel when it enters the next bridge.  These only apply to the next bridge and will be emptied thereafter.
+	 */
+	struct ast_bridge_features *bridge_features;
 	/*!
 	 * Holding place for channel's PBX while imparted to a bridge.
 	 */
@@ -99,6 +104,7 @@ static void control_dtor(void *obj)
 	ast_cond_destroy(&control->wait_cond);
 	AST_LIST_HEAD_DESTROY(&control->add_rules);
 	AST_LIST_HEAD_DESTROY(&control->remove_rules);
+
 }
 
 struct stasis_app_control *control_create(struct ast_channel *channel, struct stasis_app *app)
@@ -126,6 +132,8 @@ struct stasis_app_control *control_create(struct ast_channel *channel, struct st
 
 	ast_channel_ref(channel);
 	control->channel = channel;
+
+   control->bridge_features = NULL;
 
 	control->command_queue = ao2_container_alloc_list(
 		AO2_ALLOC_OPT_LOCK_MUTEX, 0, NULL, NULL);
@@ -1161,10 +1169,15 @@ static void set_interval_hook(struct ast_channel *chan)
 int control_swap_channel_in_bridge(struct stasis_app_control *control, struct ast_bridge *bridge, struct ast_channel *chan, struct ast_channel *swap)
 {
 	int res;
+   struct ast_bridge_features *features;
 
 	if (!control || !bridge) {
 		return -1;
 	}
+
+   /* Pull bridge features from the control */
+   features = control->bridge_features;
+   control->bridge_features = NULL;
 
 	ast_debug(3, "%s: Adding to bridge %s\n",
 		stasis_app_control_get_channel_id(control),
@@ -1220,7 +1233,7 @@ int control_swap_channel_in_bridge(struct stasis_app_control *control, struct as
 	res = ast_bridge_impart(bridge,
 		chan,
 		swap,
-		NULL, /* features */
+		features, /* features */
 		AST_BRIDGE_IMPART_CHAN_DEPARTABLE);
 	if (res != 0) {
 		/* ast_bridge_impart failed before it could spawn the depart
@@ -1314,6 +1327,37 @@ int stasis_app_control_queue_control(struct stasis_app_control *control,
 	enum ast_control_frame_type frame_type)
 {
 	return ast_queue_control(control->channel, frame_type);
+}
+
+int stasis_app_control_bridge_features_init(
+      struct stasis_app_control *control)
+{
+   struct ast_bridge_features *features;
+
+   features = ast_bridge_features_new();
+   if (!features) {
+      ast_log(LOG_ERROR, "Error initializing bridge_features: %s\n",
+            strerror(errno));
+      return 1;
+   }
+   control->bridge_features = features;
+   return 0;
+}
+
+void stasis_app_control_absorb_dtmf_in_bridge(
+      struct stasis_app_control *control, int absorb)
+{
+   if (absorb == 1) {
+      control->bridge_features->dtmf_passthrough = 0;
+   } else {
+      control->bridge_features->dtmf_passthrough = 1;
+   }
+}
+
+void stasis_app_control_mute_in_bridge(
+      struct stasis_app_control *control, int mute)
+{
+   control->bridge_features->mute = mute;
 }
 
 void control_flush_queue(struct stasis_app_control *control)
